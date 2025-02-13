@@ -2,7 +2,10 @@ import express from "express";
 import { createClient } from "@supabase/supabase-js"; 
 import jwt from 'jsonwebtoken';
 import dotenv from "dotenv";
-dotenv.config();
+import path from "path"; 
+
+const __dirname = path.resolve();
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
@@ -141,6 +144,32 @@ app.get("/users", verifyAuth('admin'), async (req, res) => {
   }
 });
 
+// Get user by ID
+app.get("/users/:id", verifyAuth(), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if user has permission (admin can view anyone, students can only view themselves)
+    if (req.user.role !== 'admin' && req.user.id !== id) {
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get user profile
 app.get("/profile", verifyAuth(), async (req, res) => {
   res.json(req.user);
@@ -221,7 +250,7 @@ app.delete("/users/:id", verifyAuth('admin'), async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("Hello World");
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 app.listen(3000, () => {

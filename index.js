@@ -1,6 +1,5 @@
 import express from "express";
 import { createClient } from "@supabase/supabase-js"; 
-import jwt from 'jsonwebtoken';
 import dotenv from "dotenv";
 import path from "path"; 
 
@@ -14,82 +13,38 @@ app.use(express.json());
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
 );
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-
-// User Registration
-app.post("/register", async (req, res) => {
-  try {
-    const { sname, semail, spass, role } = req.body;
-    
-    if (!['admin', 'student'].includes(role)) {
-      return res.status(400).json({ error: "Invalid role. Must be 'admin' or 'student'" });
-    }
-
-    // Check if user already exists
-    const { data: existingUser, error: checkError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', semail)
-      .single();
-
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
-    }
-
-    // Store user details in users table
-    const { data, error } = await supabase
-      .from('users')
-      .insert([{
-        name: sname,
-        email: semail,
-        password: spass,
-        role
-      }])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.status(201).json({ message: "User registered successfully", user: data });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// User Login
+// Student Login - simplified without token
 app.post("/login", async (req, res) => {
   try {
-    const { semail, spass } = req.body;
+    const { semail, spassword } = req.body;
     
-    // Check user credentials
-    const { data: user, error } = await supabase
-      .from('users')
+    // Validate input
+    if (!semail || !spassword) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+    
+    // Check student credentials
+    const { data: student, error } = await supabase
+      .from('student_management')
       .select('*')
-      .eq('email', semail)
-      .eq('password', spass)
+      .eq('semail', semail)
+      .eq('spassword', spassword)
       .single();
 
-    if (error || !user) {
+    if (error || !student) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user.id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
+    // Return success message with student info
     res.json({ 
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
+      message: "Login successful",
+      student: {
+        id: student.id,
+        name: student.sname,
+        email: student.semail
       }
     });
   } catch (error) {
@@ -97,71 +52,65 @@ app.post("/login", async (req, res) => {
   }
 });
 
-// Middleware to verify token
-const verifyAuth = (requiredRole) => async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: "No token provided" });
-    }
+// STUDENT MANAGEMENT ENDPOINTS
 
-    const decoded = jwt.verify(token, JWT_SECRET);
+// Create student record
+app.post("/register", async (req, res) => {
+  try {
+    const { sname, semail, spassword } = req.body;
     
-    // Get user from database
-    const { data: user, error } = await supabase
-      .from('users')
+    // Validate input
+    if (!sname || !semail || !spassword) {
+      return res.status(400).json({ error: "Name, email and password are required" });
+    }
+    
+    // Check if student already exists
+    const { data: existingStudent, error: checkError } = await supabase
+      .from('student_management')
       .select('*')
-      .eq('id', decoded.userId)
+      .eq('semail', semail)
       .single();
 
-    if (error || !user) {
-      return res.status(401).json({ error: "Unauthorized access" });
+    if (existingStudent) {
+      return res.status(400).json({ error: "Student already exists with this email" });
     }
 
-    if (requiredRole && user.role !== requiredRole) {
-      return res.status(403).json({ error: "Insufficient permissions" });
-    }
-
-    req.user = user;
-    next();
-  } catch (error) {
-    res.status(401).json({ error: "Invalid token" });
-  }
-};
-
-// Get all users (admin only)
-app.get("/users", verifyAuth('admin'), async (req, res) => {
-  try {
+    // Store student details
     const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .from('student_management')
+      .insert([{
+        sname,
+        semail,
+        spassword
+      }])
+      .select()
+      .single();
 
     if (error) throw error;
-    res.json(data);
+
+    res.status(201).json({ message: "Student added successfully", student: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get user by ID
-app.get("/users/:id", verifyAuth(), async (req, res) => {
+// Search student by ID
+app.get("/students/search/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Check if user has permission (admin can view anyone, students can only view themselves)
-    if (req.user.role !== 'admin' && req.user.id !== id) {
-      return res.status(403).json({ error: "Insufficient permissions" });
+    
+    if (!id) {
+      return res.status(400).json({ error: "Student ID is required" });
     }
 
     const { data, error } = await supabase
-      .from('users')
+      .from('student_management')
       .select('*')
       .eq('id', id)
       .single();
 
-    if (error || !data) {
-      return res.status(404).json({ error: "User not found" });
+    if (error) {
+      return res.status(404).json({ error: "Student not found" });
     }
 
     res.json(data);
@@ -170,29 +119,38 @@ app.get("/users/:id", verifyAuth(), async (req, res) => {
   }
 });
 
-// Get user profile
-app.get("/profile", verifyAuth(), async (req, res) => {
-  res.json(req.user);
-});
-
-// Update user (admin can update anyone, students can only update themselves)
-app.put("/users/:id", verifyAuth(), async (req, res) => {
+// Update student - with email/password verification
+app.put("/students/update/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, semail } = req.body;
+    const { sname, semail, spassword, currentEmail, currentPassword } = req.body;
     
-    // Check if user has permission to update
-    if (req.user.role !== 'admin' && req.user.id !== id) {
-      return res.status(403).json({ error: "Insufficient permissions" });
+    // Require current credentials to verify identity
+    if (!currentEmail || !currentPassword) {
+      return res.status(400).json({ error: "Current email and password are required for authentication" });
     }
 
+    // Verify student credentials
+    const { data: student, error: authError } = await supabase
+      .from('student_management')
+      .select('*')
+      .eq('id', id)
+      .eq('semail', currentEmail)
+      .eq('spassword', currentPassword)
+      .single();
+
+    if (authError || !student) {
+      return res.status(403).json({ error: "Authentication failed. Please provide correct credentials." });
+    }
+    
     // Create update object with only provided fields
     const updateData = {};
-    if (name) updateData.name = name;
-    if (semail) updateData.email = semail;
+    if (sname) updateData.sname = sname;
+    if (semail) updateData.semail = semail;
+    if (spassword) updateData.spassword = spassword;
 
     const { data, error } = await supabase
-      .from('users')
+      .from('student_management')
       .update(updateData)
       .eq('id', id)
       .select()
@@ -200,50 +158,46 @@ app.put("/users/:id", verifyAuth(), async (req, res) => {
 
     if (error) throw error;
     if (!data) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({ error: "Student not found" });
     }
-    res.json(data);
+    res.json({ message: "Student updated successfully", student: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Delete user (admin only)
-app.delete("/users/:id", verifyAuth('admin'), async (req, res) => {
+// Delete student - with email/password verification
+app.delete("/students/delete/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const { currentEmail, currentPassword } = req.body;
     
-    // Check if user exists before deleting
-    const { data: existingUser, error: checkError } = await supabase
-      .from('users')
+    // Require current credentials to verify identity
+    if (!currentEmail || !currentPassword) {
+      return res.status(400).json({ error: "Current email and password are required for authentication" });
+    }
+
+    // Verify student credentials
+    const { data: student, error: authError } = await supabase
+      .from('student_management')
       .select('*')
       .eq('id', id)
+      .eq('semail', currentEmail)
+      .eq('spassword', currentPassword)
       .single();
 
-    if (checkError || !existingUser) {
-      return res.status(404).json({ error: "User not found" });
+    if (authError || !student) {
+      return res.status(403).json({ error: "Authentication failed. Please provide correct credentials." });
     }
-
-    // Prevent deleting the last admin
-    if (existingUser.role === 'admin') {
-      const { data: adminCount, error: countError } = await supabase
-        .from('users')
-        .select('id')
-        .eq('role', 'admin');
-
-      if (!countError && adminCount.length === 1) {
-        return res.status(400).json({ error: "Cannot delete the last admin user" });
-      }
-    }
-
+    
     const { error: deleteError } = await supabase
-      .from('users')
+      .from('student_management')
       .delete()
       .eq('id', id);
 
     if (deleteError) throw deleteError;
     
-    res.json({ message: "User deleted successfully" });
+    res.json({ message: "Student deleted successfully" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -253,6 +207,6 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(3000, () => {
-  console.log("Server is running on port 3000");
+app.listen(6001, () => {
+  console.log("Server is running on port 6001");
 });
